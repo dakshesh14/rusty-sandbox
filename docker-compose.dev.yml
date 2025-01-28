@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   rusty_sandbox:
     build:
@@ -13,3 +11,5 @@ services:
     command: cargo run
     stdin_open: true
     tty: true
+    mem_limit: 2g
+    memswap_limit: 2g

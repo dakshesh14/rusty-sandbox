@@ -3,6 +3,8 @@ use nix::sched::{unshare, CloneFlags};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::{fork, ForkResult, Pid};
 use std::process::Command;
+use std::time::Duration;
+use std::{fs, thread};
 
 fn create_child_process() -> Option<Pid> {
     match unsafe { fork() } {
@@ -22,6 +24,14 @@ fn create_child_process() -> Option<Pid> {
             eprintln!("Failed to fork process");
             None
         }
+    }
+}
+
+fn is_process_running(pid: Pid) -> bool {
+    let path = format!("/proc/{}/status", pid);
+    match fs::metadata(path) {
+        Ok(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -46,10 +56,17 @@ fn terminate_process(pid: Pid) {
 
 fn main() {
     if let Some(pid) = create_child_process() {
-        unsafe {
-            sleep(1);
+        let timeout = 15;
+        let start_time = std::time::Instant::now();
+
+        while start_time.elapsed().as_secs() < timeout {
+            if is_process_running(pid) {
+                run_echo_in_child(pid, "echo 'Hello from child process'");
+                break;
+            }
+            thread::sleep(Duration::from_secs(1));
         }
-        run_echo_in_child(pid, "echo 'Hello from child process'");
+
         terminate_process(pid);
     }
 }

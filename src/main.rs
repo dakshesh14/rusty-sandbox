@@ -3,16 +3,52 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
 
+use nix::libc::{prlimit, rlimit, RLIMIT_CPU};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
 
+// TODO: skip this function conditional using environment variables
+fn configure_cgroups(pid: Pid) {
+    let cgroup_path = format!("/sys/fs/cgroup/sandbox_{}", pid);
+    fs::create_dir_all(&cgroup_path).expect("Failed to create cgroup directory");
+
+    fs::write(format!("{}/cup.max", cgroup_path), "50000 100000").expect("Failed to set CPU limit");
+
+    fs::write(format!("{}/memory.max", cgroup_path), "134217728")
+        .expect("Failed to set memory limit");
+
+    fs::write(format!("{}/cgroup.procs", cgroup_path), pid.to_string())
+        .expect("Failed to add process to cgroup");
+}
+
+fn set_process_limit(pid: Pid, resource: u32, limit: u64) {
+    let rlim = rlimit {
+        rlim_cur: limit,
+        rlim_max: limit,
+    };
+    let ret = unsafe { prlimit(pid.as_raw(), resource, &rlim, std::ptr::null_mut()) };
+    if ret != 0 {
+        eprintln!(
+            "Failed to set rlimit for PID {}: {}",
+            pid,
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
 fn create_child_process() -> Option<Pid> {
     match unsafe { fork() } {
         Ok(ForkResult::Child) => {
             unshare(CloneFlags::CLONE_NEWPID).expect("Failed to unshare PID namespace");
-            println!("Child process PID: {}", nix::unistd::getpid());
+
+            let pid = nix::unistd::getpid();
+
+            println!("Child process PID: {}", pid);
+
+            configure_cgroups(pid);
+            set_process_limit(pid, RLIMIT_CPU, 10);
 
             loop {
                 sleep(Duration::from_secs(1));

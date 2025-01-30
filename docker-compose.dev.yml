@@ -7,9 +7,17 @@ services:
     privileged: true
     volumes:
       - .:/app
+      # NOTE: Uncomment the line below if you want to enforce cgroups.
+      #       However, be cautious when doing so, as it may lead to permission issues.
+      # - /sys/fs/cgroup:/sys/fs/cgroup:rw
     working_dir: /app
     command: cargo run
     stdin_open: true
     tty: true
     mem_limit: 2g
     memswap_limit: 2g
+
+    # NOTE: Uncomment below if you want to disable seccomp for your container.
+    #       This can help avoid restrictions, but it may reduce security.
+    # security_opt:
+    #   - seccomp=unconfined

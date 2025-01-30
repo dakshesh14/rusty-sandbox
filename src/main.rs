@@ -1,10 +1,12 @@
-use nix::libc::sleep;
-use nix::sched::{unshare, CloneFlags};
-use nix::sys::signal::{kill, Signal};
-use nix::unistd::{fork, ForkResult, Pid};
 use std::process::Command;
+use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
+
+use nix::sched::{unshare, CloneFlags};
+use nix::sys::signal::{kill, Signal};
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::unistd::{fork, ForkResult, Pid};
 
 fn create_child_process() -> Option<Pid> {
     match unsafe { fork() } {
@@ -13,7 +15,7 @@ fn create_child_process() -> Option<Pid> {
             println!("Child process PID: {}", nix::unistd::getpid());
 
             loop {
-                unsafe { sleep(5) };
+                sleep(Duration::from_secs(1));
             }
         }
         Ok(ForkResult::Parent { child }) => {
@@ -47,10 +49,20 @@ fn run_echo_in_child(pid: Pid, cmd: &str) {
 }
 
 fn terminate_process(pid: Pid) {
-    if let Err(e) = kill(pid, Signal::SIGKILL) {
-        eprintln!("Failed to kill process: {}", e);
-    } else {
-        println!("Killed process with PID: {}", pid);
+    if let Err(e) = kill(pid, Signal::SIGTERM) {
+        eprint!("Failed to kill process: {}", e);
+        return;
+    }
+
+    for _ in 0..5 {
+        match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(_, _)) | Ok(WaitStatus::Signaled(_, _, _)) => {
+                println!("Process {} exited gracefully", pid);
+                return;
+            }
+            Ok(_) | Err(_) => {}
+        }
+        sleep(Duration::from_secs(1));
     }
 }
 

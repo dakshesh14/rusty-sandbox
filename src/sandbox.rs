@@ -15,6 +15,9 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    /// Creates a new sandboxed process using `fork()`.
+    /// The child process enters isolated namespaces and applies cgroups and resource limits.
+    /// Returns `Some(Sandbox)` if successful, otherwise `None`.
     pub fn new() -> Option<Self> {
         match unsafe { fork() } {
             Ok(ForkResult::Child) => {
@@ -44,12 +47,14 @@ impl Sandbox {
                 Some(Sandbox { pid: child })
             }
             Err(_) => {
-                eprintln!("Failed to fork profess");
+                eprintln!("Failed to fork process");
                 None
             }
         }
     }
 
+    /// Configures cgroups for the given process ID (`pid`).
+    /// CPU and memory limits are applied if `ENABLE_CGROUPS=true` is set in the environment.
     fn configure_cgroups(pid: Pid) {
         let enable_cgroups =
             env::var("ENABLE_CGROUPS").unwrap_or_else(|_| "false".into()) == "true";
@@ -72,6 +77,7 @@ impl Sandbox {
             .expect("Failed to add process to cgroup");
     }
 
+    /// Sets resource limits (e.g., CPU time, file size) for a process.
     fn set_process_limit(pid: Pid, resource: u32, limit: u64) {
         let rlim = rlimit {
             rlim_cur: limit,
@@ -89,6 +95,8 @@ impl Sandbox {
         }
     }
 
+    /// Checks if the sandboxed process is still running.
+    /// Returns `true` if the process is active, otherwise `false`.
     pub fn is_running(&self) -> bool {
         let path = format!("/proc/{}/status", self.pid);
         match fs::metadata(path) {
@@ -97,6 +105,7 @@ impl Sandbox {
         }
     }
 
+    /// Runs a command inside the sandboxed process using `nsenter`.
     pub fn run_command(&self, cmd: &str) {
         let command = format!("nsenter --target {} --pid -- sh -c \"{}\"", self.pid, cmd);
         Command::new("sh")
@@ -108,6 +117,8 @@ impl Sandbox {
             .expect("Failed to wait for command");
     }
 
+    /// Terminates the sandboxed process gracefully using `SIGTERM`.
+    /// Waits up to 5 seconds for the process to exit.
     pub fn terminate(&self) {
         if let Err(e) = kill(self.pid, Signal::SIGTERM) {
             eprintln!("Failed to kill process: {}", e);

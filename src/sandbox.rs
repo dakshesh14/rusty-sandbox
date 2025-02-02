@@ -1,14 +1,23 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
 
+use libc::prctl;
+use libc::PR_SET_SECCOMP;
+use libc::SECCOMP_MODE_FILTER;
 use nix::libc::{prlimit, rlimit, RLIMIT_CPU, RLIMIT_FSIZE};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::unistd::chroot;
 use nix::unistd::{fork, ForkResult, Pid};
+
+use seccomp::Compare;
+use seccomp::Context;
+use seccomp::{Action, Rule};
 
 pub struct Sandbox {
     pid: Pid,
@@ -25,7 +34,9 @@ impl Sandbox {
                     CloneFlags::CLONE_NEWPID
                         | CloneFlags::CLONE_NEWNET
                         | CloneFlags::CLONE_NEWNS
-                        | CloneFlags::CLONE_NEWUTS,
+                        | CloneFlags::CLONE_NEWUTS
+                        | CloneFlags::CLONE_NEWIPC
+                        | CloneFlags::CLONE_NEWUSER,
                 )
                 .expect("Failed to unshare PID namespace");
 
@@ -34,6 +45,11 @@ impl Sandbox {
                 println!("Child process with PID: {}", pid);
 
                 Self::configure_cgroups(pid);
+                Self::isolate_filesystem(pid);
+                Self::drop_root_privileges();
+                Self::apply_seccomp(pid);
+                Self::limit_process_count(pid);
+                Self::disable_network(pid);
 
                 Self::set_process_limit(pid, RLIMIT_CPU, 10);
                 Self::set_process_limit(pid, RLIMIT_FSIZE, 20 * 1024 * 1024);
@@ -49,6 +65,95 @@ impl Sandbox {
             Err(_) => {
                 eprintln!("Failed to fork process");
                 None
+            }
+        }
+    }
+
+    /// Drops root privileges by setting up UID and GID mappings and disabling setgroups.
+    /// This prevents the sandboxed process from gaining root privileges.
+    fn drop_root_privileges() {
+        fs::write("/proc/self/setgroups", "deny").expect("Failed to disable setgroups.");
+        fs::write("/proc/self/uid_map", "1000 1000 1").expect("Failed to set UID map");
+        fs::write("/proc/self/gid_map", "1000 1000 1").expect("Failed to set UID map");
+    }
+
+    /// Isolates the filesystem by using `chroot` to set the root directory for the process.
+    /// The process will only be able to access files within this new root directory.
+    fn isolate_filesystem(pid: Pid) {
+        let root_dir = format!("sandbox/{}/root", pid);
+        chroot(root_dir.as_str()).expect("Failed to chroot");
+        std::env::set_current_dir("/").expect("Failed to change directory.");
+    }
+
+    /// Limits the process count for the sandboxed process by configuring the cgroup for PIDs.
+    /// This prevents the process from creating an excessive number of child processes.
+    fn limit_process_count(pid: Pid) {
+        let cgroup_path = format!("/sys/fs/cgroup/sandbox_{}/pids.max", pid);
+        if !Path::new(&cgroup_path).exists() {
+            fs::create_dir_all(&cgroup_path).expect("Failed to create cgroup directory");
+        }
+
+        fs::write(cgroup_path, "20").expect("Failed to set process limit");
+    }
+
+    /// Disables network access for the sandboxed process by configuring the cgroup to block networking.
+    /// This ensures the process cannot access the internet or other network resources.
+    fn disable_network(pid: Pid) {
+        let net_cls = format!("/sys/fs/cgroup/sandbox_{}/net_cls.classid", pid);
+        fs::write(net_cls, "0").expect("Failed to disable network access");
+    }
+
+    /// Applies a seccomp filter to restrict the system calls that the sandboxed process can make.
+    /// This is done to prevent the process from performing harmful or dangerous operations.
+    fn apply_seccomp(pid: Pid) {
+        let mut ctx =
+            Context::default(Action::Kill).expect("Error occurred while setting context.");
+
+        let read_rule = Rule::new(
+            0,
+            Compare::arg(0)
+                .using(seccomp::Op::Ge)
+                .with(0)
+                .build()
+                .unwrap(),
+            Action::Allow,
+        );
+        ctx.add_rule(read_rule).expect("Failed to set read rule.");
+
+        let write_rule = Rule::new(
+            1,
+            Compare::arg(0)
+                .using(seccomp::Op::Ge)
+                .with(0)
+                .build()
+                .unwrap(),
+            Action::Allow,
+        );
+        ctx.add_rule(write_rule).expect("Failed to set write rule.");
+
+        let exit_rule = Rule::new(
+            60,
+            Compare::arg(0)
+                .using(seccomp::Op::Ge)
+                .with(0)
+                .build()
+                .unwrap(),
+            Action::Allow,
+        );
+        ctx.add_rule(exit_rule).expect("Failed to set exit rule.");
+
+        ctx.load().expect("Failed to load context");
+
+        unsafe {
+            let res = prctl(
+                PR_SET_SECCOMP,
+                SECCOMP_MODE_FILTER,
+                pid.as_raw() as u32,
+                0,
+                0,
+            );
+            if res != 0 {
+                eprintln!("Failed to apply seccomp filter to PID {}", pid);
             }
         }
     }

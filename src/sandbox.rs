@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -18,6 +17,8 @@ use nix::unistd::{fork, ForkResult, Pid};
 use seccomp::Compare;
 use seccomp::Context;
 use seccomp::{Action, Rule};
+
+use crate::config::constants::Settings;
 
 pub struct Sandbox {
     pid: Pid,
@@ -44,12 +45,16 @@ impl Sandbox {
 
                 println!("Child process with PID: {}", pid);
 
-                Self::configure_cgroups(pid);
-                Self::isolate_filesystem(pid);
-                Self::drop_root_privileges();
-                Self::apply_seccomp(pid);
-                Self::limit_process_count(pid);
-                Self::disable_network(pid);
+                if (Settings::from_env().use_complete_isolation) {
+                    Self::configure_cgroups(pid);
+                    Self::isolate_filesystem(pid);
+                    Self::drop_root_privileges();
+                    Self::apply_seccomp(pid);
+                    Self::limit_process_count(pid);
+                    Self::disable_network(pid);
+                } else {
+                    eprintln!("\x1b[33mWarning: Not using complete isolation setup!\x1b[0m");
+                }
 
                 Self::set_process_limit(pid, RLIMIT_CPU, 10);
                 Self::set_process_limit(pid, RLIMIT_FSIZE, 20 * 1024 * 1024);
@@ -161,16 +166,6 @@ impl Sandbox {
     /// Configures cgroups for the given process ID (`pid`).
     /// CPU and memory limits are applied if `ENABLE_CGROUPS=true` is set in the environment.
     fn configure_cgroups(pid: Pid) {
-        let enable_cgroups =
-            env::var("ENABLE_CGROUPS").unwrap_or_else(|_| "false".into()) == "true";
-
-        if !enable_cgroups {
-            eprintln!(
-                "\x1b[33mWarning: Cgroups configuration is skipped set ENABLE_CGROUPS=true.\x1b[0m"
-            );
-            return;
-        }
-
         let cgroup_path = format!("/sys/fs/cgroup/sandbox_{}", pid);
         fs::create_dir_all(&cgroup_path).expect("Failed to create cgroup directory");
 
@@ -211,15 +206,19 @@ impl Sandbox {
     }
 
     /// Runs a command inside the sandboxed process using `nsenter`.
-    pub fn run_command(&self, cmd: &str) {
+    pub fn run_command(&self, cmd: &str) -> Result<String, String> {
         let command = format!("nsenter --target {} --pid -- sh -c \"{}\"", self.pid, cmd);
-        Command::new("sh")
+        let output = Command::new("sh")
             .arg("-c")
             .arg(command)
-            .spawn()
-            .expect("Failed to run command in child")
-            .wait()
-            .expect("Failed to wait for command");
+            .output()
+            .map_err(|e| format!("{}", e))?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
     }
 
     /// Terminates the sandboxed process gracefully using `SIGTERM`.

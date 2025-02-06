@@ -18,7 +18,7 @@ use seccomp::Compare;
 use seccomp::Context;
 use seccomp::{Action, Rule};
 
-use crate::config::constants::Settings;
+use crate::constants::Settings;
 
 pub struct Sandbox {
     pid: Pid,
@@ -45,19 +45,18 @@ impl Sandbox {
 
                 println!("Child process with PID: {}", pid);
 
-                if (Settings::from_env().use_complete_isolation) {
+                if Settings::from_env().use_complete_isolation {
                     Self::configure_cgroups(pid);
                     Self::isolate_filesystem(pid);
                     Self::drop_root_privileges();
                     Self::apply_seccomp(pid);
                     Self::limit_process_count(pid);
                     Self::disable_network(pid);
+                    Self::set_process_limit(pid, RLIMIT_CPU, 10);
+                    Self::set_process_limit(pid, RLIMIT_FSIZE, 20 * 1024 * 1024);
                 } else {
-                    eprintln!("\x1b[33mWarning: Not using complete isolation setup!\x1b[0m");
+                    eprintln!("\x1b[33mWarning: Full isolation is not enabled! Potentially malicious code may be executed.\x1b[0m");
                 }
-
-                Self::set_process_limit(pid, RLIMIT_CPU, 10);
-                Self::set_process_limit(pid, RLIMIT_FSIZE, 20 * 1024 * 1024);
 
                 loop {
                     sleep(Duration::from_secs(1));

@@ -85,6 +85,10 @@ impl Sandbox {
     /// The process will only be able to access files within this new root directory.
     fn isolate_filesystem(pid: Pid) {
         let root_dir = format!("sandbox/{}/root", pid);
+        if !Path::new(&root_dir).exists() {
+            fs::create_dir_all(&root_dir).expect("Failed to create cgroup directory");
+        }
+
         chroot(root_dir.as_str()).expect("Failed to chroot");
         std::env::set_current_dir("/").expect("Failed to change directory.");
     }

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rusty Sandbox</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+  </head>
+  <body>
+    <div class="container mt-5">
+      <textarea
+        rows="10"
+        name="code"
+        id="codeTextArea"
+        class="form-control"
+      ></textarea>
+
+      <button id="submitPython" type="button" class="btn btn-dark mt-2">
+        Submit As Python
+      </button>
+      <button id="submitCpp" type="button" class="btn btn-dark mt-2">
+        Submit As Cpp
+      </button>
+
+      <div class="mt-5">
+        <pre id="preview"></pre>
+      </div>
+    </div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+      crossorigin="anonymous"
+    ></script>
+
+    <script>
+      const submitPythonButton = document.getElementById("submitPython");
+      const submitCppButton = document.getElementById("submitCpp");
+      const previewRoot = document.getElementById("preview");
+      const codeTextarea = document.getElementById("codeTextArea");
+
+      // TODO: add error handling
+      async function submit(language) {
+        const response = await fetch(`http://127.0.0.1:8000/${language}`, {
+          method: "post",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            code: codeTextarea.value,
+          }),
+        });
+
+        const parsedResponse = await response.json();
+
+        const output = parsedResponse.output;
+        previewRoot.innerText = output;
+      }
+
+      submitPythonButton.onclick = () => submit("python");
+      submitCppButton.onclick = () => submit("cpp");
+    </script>
+  </body>
+</html>

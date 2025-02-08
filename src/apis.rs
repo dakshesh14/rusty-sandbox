@@ -5,6 +5,7 @@ use std::{
 
 use axum::{routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use crate::sandbox::Sandbox;
@@ -111,4 +112,5 @@ pub fn get_routes() -> Router {
     Router::new()
         .route("/python", post(run_python))
         .route("/cpp", post(run_cpp))
+        .layer(CorsLayer::permissive())
 }
